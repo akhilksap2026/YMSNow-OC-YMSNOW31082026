@@ -1,0 +1,11 @@
+# Build outputs
+dist/
+*.tsbuildinfo
+
+# Dependencies
+node_modules/
+
+# Environment
+.env
+.env.*
+!.env.example

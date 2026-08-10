@@ -1,0 +1,5 @@
+- [DB package rebuild requirement](db-package-rebuild.md) — after schema changes, `@workspace/db` dist/ must be rebuilt before api-server typecheck will see new types
+- [YMS header-based demo auth](yms-header-auth.md) — no real sessions; role/carrier scoping flows through x-user-role/x-carrier-id headers trusted as-is
+- [YMS multi-facility scoping](yms-facility-scoping.md) — x-facility-id is client-trusted like x-carrier-id; resolveFacilityScope() is the single choke point; super_admin bypasses it
+- [api-server dev server has no hot reload](api-server-no-hotreload.md) — tsx runs without --watch; must WorkflowsRestart after editing api-server code to see changes
+- [Module Subscription System](subscription-system.md) — facility × module access control; padlock sidebar UX; Platform Admin page at /platform-admin; noImplicitReturns gotcha in Express handlers

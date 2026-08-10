@@ -1,0 +1,25 @@
+# Node modules
+node_modules/
+replit/node_modules/
+replit/artifacts/*/node_modules/
+replit/lib/*/node_modules/
+replit/scripts/node_modules/
+
+# Build output
+dist/
+replit/artifacts/*/dist/
+
+# Environment variables
+.env
+replit/.env
+
+# Logs
+logfile
+*.log
+
+# pgsql portable binaries (local dev only)
+pgsql/
+
+# OS files
+.DS_Store
+Thumbs.db

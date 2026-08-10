@@ -1,0 +1,34 @@
+Audit and fix this repo (pnpm workspace: replit/) for a clean, reproducible Docker build. Three specific defects are confirmed present — verify each, fix it, then prove the fix with the exact commands below. Do not modify unrelated code, formatting, or dependencies.
+
+CONTEXT: docker-compose.yml builds ./replit with replit/Dockerfile. That Dockerfile runs, in order:
+  1. pnpm install --frozen-lockfile   (full workspace, all 9 packages)
+  2. pnpm run build                   (root script: typecheck, then `pnpm -r --if-present run build`)
+  3. CMD: pnpm --filter @workspace/db run push && node artifacts/api-server/dist/index.cjs
+
+FIX 1 — stale build cache breaks typecheck:
+lib/db/tsconfig.tsbuildinfo (and possibly lib/api-client-react/tsconfig.tsbuildinfo, lib/api-zod/tsconfig.tsbuildinfo) is committed to git and stale: `tsc --build` treats lib/db as already compiled even though lib/db/dist/ doesn't exist on disk, which cascades into ~150 false TypeScript errors (TS6305, TS7006, TS2339 "does not exist on type '{}'") in api-server's storage.ts, seed.ts, register-yms-routes.ts.
+  - Delete all committed *.tsbuildinfo files under lib/*/
+  - Add *.tsbuildinfo to .gitignore so this can't recur
+  - Verify: rm -rf lib/*/dist lib/*/*.tsbuildinfo && npx tsc --build --force && ls lib/db/dist  → must show index.d.ts
+  - Verify: pnpm run typecheck → must exit 0 with zero errors
+
+FIX 2 — puppeteer postinstall can fail the entire `pnpm install`:
+artifacts/mockup-sandbox has puppeteer as a devDependency (unused in its own source) whose postinstall downloads a Chrome binary from an external CDN. Any network-restricted build environment gets a hard failure (exit 1) on `pnpm install --frozen-lockfile`, killing the whole image build — even though mockup-sandbox is never copied or built by the Dockerfile.
+  - Preferred: remove puppeteer from artifacts/mockup-sandbox/package.json if truly unused (grep the package's src/ to confirm zero references first)
+  - If it's actually needed for local dev only: add `ENV PUPPETEER_SKIP_DOWNLOAD=true` in replit/Dockerfile before the `RUN pnpm install --frozen-lockfile` lines (both build and runner stages), and add the same var to docker-compose.yml's app.environment and to .replit's [deployment.postBuild].env if relevant
+  - Regenerate pnpm-lock.yaml if the dependency was removed
+  - Verify: rm -rf node_modules && pnpm install --frozen-lockfile (with no PUPPETEER env var pre-set in the shell) → must exit 0
+
+FIX 3 — mockup-sandbox's vite.config.ts throws at build time outside Replit:
+artifacts/mockup-sandbox/vite.config.ts hard-throws if process.env.PORT or process.env.BASE_PATH aren't set, which breaks the root `pnpm run build` (it runs `pnpm -r --if-present run build` across ALL packages, including this one) in any non-Replit environment like Docker.
+  - Confirm whether mockup-sandbox is actually needed in production (Dockerfile never references it) — if not, either exclude it from the root build script, or make vite.config.ts fall back to sane defaults instead of throwing when REPL_ID is undefined (mirror how it already checks REPL_ID for the Replit-only dev plugins)
+  - Verify: unset PORT BASE_PATH REPL_ID; PUPPETEER_SKIP_DOWNLOAD=true pnpm run build → must exit 0 and produce artifacts/api-server/dist/index.cjs and artifacts/yms/dist/public/index.html
+
+FINAL VALIDATION — after all three fixes, run the full sequence exactly as Docker will:
+  rm -rf node_modules **/node_modules lib/*/dist lib/*/tsconfig.tsbuildinfo
+  pnpm install --frozen-lockfile
+  pnpm run build
+  pnpm --filter @workspace/db run push   (confirm this succeeds against a real/test DATABASE_URL, or report exactly what it needs)
+  node artifacts/api-server/dist/index.cjs   (confirm it starts and listens without crashing, given PORT + DATABASE_URL)
+
+Report back: which of the 3 fixes were needed, exact diffs made, and full output of the final validation sequence. Do not consider this done until that sequence exits 0 end-to-end.

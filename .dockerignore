@@ -1,0 +1,35 @@
+# ── Version control ───────────────────────────────────────────────────────────
+.git
+.gitignore
+
+# ── Replit-specific ───────────────────────────────────────────────────────────
+.replit
+replit.nix
+.replit_integration_files
+.cache
+.local
+.agents
+
+# ── Dependencies (reinstalled inside the image) ───────────────────────────────
+**/node_modules
+
+# ── Build outputs (rebuilt inside the image) ──────────────────────────────────
+replit/artifacts/api-server/dist
+replit/artifacts/yms/dist
+replit/lib/db/dist
+replit/lib/db/tsconfig.tsbuildinfo
+
+# ── Environment / secrets ─────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ── Logs ──────────────────────────────────────────────────────────────────────
+*.log
+npm-debug.log*
+
+# ── OS / editor noise ─────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.vscode
+.idea

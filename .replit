@@ -1,0 +1,45 @@
+modules = ["nodejs-20", "web", "bash", "python-3.11", "postgresql-16"]
+[agent]
+expertMode = true
+
+[nix]
+channel = "stable-25_05"
+
+[workflows]
+
+[[ports]]
+localPort = 5000
+externalPort = 3000
+
+[[ports]]
+localPort = 5001
+externalPort = 3002
+
+[[ports]]
+localPort = 8080
+externalPort = 8080
+
+[[ports]]
+localPort = 8081
+externalPort = 8081
+
+[[ports]]
+localPort = 8082
+externalPort = 3001
+
+[[ports]]
+localPort = 25753
+externalPort = 80
+
+[[ports]]
+localPort = 25754
+externalPort = 3003
+
+[deployment]
+deploymentTarget = "autoscale"
+run = ["bash", "-c", "cd replit && PORT=25753 node artifacts/api-server/dist/index.cjs"]
+build = ["bash", "-c", "cd replit && pnpm --filter @workspace/yms run build && pnpm --filter @workspace/api-server run build"]
+
+[postMerge]
+path = "replit/scripts/post-merge.sh"
+timeoutMs = 120000
