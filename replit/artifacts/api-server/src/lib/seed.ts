@@ -26,6 +26,10 @@ import {
   locationHistory,
   facilities,
   facilityModuleSubscriptions,
+  emailAiAlerts,
+  inboundEmailLog,
+  carrierContacts,
+  emailIntelligenceConfig,
 } from "@workspace/db";
 import { count, eq, sql } from "drizzle-orm";
 
@@ -1070,8 +1074,233 @@ export async function resetAndReseed() {
   // demo-users.ts) — restart the sequence so a reset always reproduces
   // Columbus=1, Dallas=2, Chicago=3 instead of drifting upward forever.
   await db.execute(sql`ALTER SEQUENCE facilities_id_seq RESTART WITH 1`);
+  // Email intelligence tables — clear in FK-safe order
+  await db.delete(emailAiAlerts);
+  await db.delete(inboundEmailLog);
+  await db.delete(carrierContacts);
+  await db.delete(emailIntelligenceConfig);
   console.log("All tables cleared. Re-seeding...");
   await seedDatabase();
   await seedAdditionalFacilities();
   await seedModuleSubscriptions();
+  await seedEmailIntelligenceIfEmpty();
+}
+
+// ── Email Intelligence Demo Seed ───────────────────────────────────────────────
+// Populates realistic email alert data so the Email Intelligence page shows
+// content immediately without requiring the user to click "Load Demo Cases".
+// Uses hardcoded AI-quality summaries so no OpenAI key is needed.
+export async function seedEmailIntelligenceIfEmpty() {
+  const existing = await db.select().from(emailAiAlerts).limit(1);
+  if (existing.length > 0) {
+    console.log("Email intelligence already seeded, skipping.");
+    return;
+  }
+
+  console.log("Seeding email intelligence demo data...");
+
+  // Ensure config exists
+  const cfgRows = await db.select().from(emailIntelligenceConfig).limit(1);
+  if (cfgRows.length === 0) {
+    await db.insert(emailIntelligenceConfig).values({
+      testModeEnabled: true,
+      fixedTestSupervisorEmail: "supervisor@ymsnow.com",
+      allowedSenderValidation: true,
+      aiConfidenceThreshold: "0.70",
+    });
+  }
+
+  // Seed carrier contacts if missing
+  const contactRows = await db.select().from(carrierContacts).limit(1);
+  if (contactRows.length === 0) {
+    await db.insert(carrierContacts).values([
+      { carrierName: "FastMove Logistics",    contactName: "FastMove Operations", contactEmail: "ops@fastmove.com",           isActive: true, allowedForEmailIntelligence: true },
+      { carrierName: "BlueDart Carrier Ops",  contactName: "BlueDart Alerts",     contactEmail: "alerts@bluedartdemo.com",    isActive: true, allowedForEmailIntelligence: true },
+      { carrierName: "RoadAxis Transport",    contactName: "RoadAxis Dispatch",   contactEmail: "dispatch@roadaxis.com",      isActive: true, allowedForEmailIntelligence: true },
+    ]);
+  }
+
+  // Insert inbound email logs first (we need their IDs for alerts)
+  const now = new Date();
+  const mins = (m: number) => new Date(now.getTime() - m * 60000);
+
+  const [log1] = await db.insert(inboundEmailLog).values({
+    senderEmail: "ops@fastmove.com",
+    subject: "SHP-10024 - Truck delayed due to breakdown",
+    emailBody: "Vehicle has broken down on the way. Expected delay is 3 hours. Our driver is waiting for roadside assistance. Please note this will impact planned dock timing.",
+    receivedAt: mins(25),
+    matchedShipmentRef: "SHP-10024",
+    matchStatus: "matched",
+    aiSummary: "FastMove reports a 3-hour delay for SHP-10024 due to a truck breakdown. Driver is awaiting roadside assistance; estimated arrival pushed to late morning.",
+    aiActionable: "Notify dock scheduling and shift appointment window by 3 hours. Confirm revised ETA with driver before re-queuing.",
+    aiIntent: "delay",
+    conflictFlag: false,
+    conflictReason: null,
+    routedSupervisorEmail: "supervisor@ymsnow.com",
+    status: "new",
+  }).returning();
+
+  const [log2] = await db.insert(inboundEmailLog).values({
+    senderEmail: "alerts@bluedartdemo.com",
+    subject: "SHP-10031 - Request to reschedule appointment",
+    emailBody: "Driver has arrived at a different site first. Please move the slot by 2 hours. We apologize for the inconvenience and appreciate your flexibility.",
+    receivedAt: mins(18),
+    matchedShipmentRef: "SHP-10031",
+    matchStatus: "matched",
+    aiSummary: "BlueDart requests a 2-hour slot shift for SHP-10031, but the trailer has already completed gate check-in and is on premises.",
+    aiActionable: "Alert supervisor immediately — reschedule request conflicts with gate-in status. Do not modify appointment; confirm physical trailer location before acting.",
+    aiIntent: "reschedule_request",
+    conflictFlag: true,
+    conflictReason: "Reschedule requested after gate-in — shipment already on premises",
+    routedSupervisorEmail: "supervisor@ymsnow.com",
+    status: "new",
+  }).returning();
+
+  const [log3] = await db.insert(inboundEmailLog).values({
+    senderEmail: "dispatch@roadaxis.com",
+    subject: "SHP-10045 - Urgent unloading required",
+    emailBody: "This shipment contains priority material and requires urgent unloading. Customer has escalated to management. Please treat as high priority.",
+    receivedAt: mins(12),
+    matchedShipmentRef: "SHP-10045",
+    matchStatus: "matched",
+    aiSummary: "RoadAxis is requesting priority unloading for SHP-10045 citing customer escalation. Trailer is in dock queue; bumping may disrupt current sequencing.",
+    aiActionable: "Escalate to dock supervisor to evaluate queue reprioritization. Confirm with operations manager before changing order.",
+    aiIntent: "urgent_unloading_request",
+    conflictFlag: true,
+    conflictReason: "Priority change may impact current dock queue",
+    routedSupervisorEmail: "supervisor@ymsnow.com",
+    status: "new",
+  }).returning();
+
+  const [log4] = await db.insert(inboundEmailLog).values({
+    senderEmail: "ops@fastmove.com",
+    subject: "SHP-10052 - Cancel shipment",
+    emailBody: "Customer has asked to cancel this delivery. Please halt the unloading process immediately and arrange for return pickup.",
+    receivedAt: mins(8),
+    matchedShipmentRef: "SHP-10052",
+    matchStatus: "matched",
+    aiSummary: "FastMove requests cancellation of SHP-10052, but unloading is already in progress. Halting mid-operation requires supervisor approval and dock crew coordination.",
+    aiActionable: "Immediately notify dock crew to pause unloading. Supervisor override required to halt in-progress operation and initiate return logistics.",
+    aiIntent: "cancellation_request",
+    conflictFlag: true,
+    conflictReason: "Cancellation requested after operation start — manual override required",
+    routedSupervisorEmail: "supervisor@ymsnow.com",
+    status: "new",
+  }).returning();
+
+  const [log5] = await db.insert(inboundEmailLog).values({
+    senderEmail: "alerts@bluedartdemo.com",
+    subject: "SHP-10061 - Vehicle changed for this shipment",
+    emailBody: "Original truck unavailable due to mechanical issues. Replacement vehicle (different plate) will arrive instead. Driver confirmation attached.",
+    receivedAt: mins(5),
+    matchedShipmentRef: "SHP-10061",
+    matchStatus: "matched",
+    aiSummary: "BlueDart is substituting the vehicle for SHP-10061, but the original vehicle has already been gate-verified. New plate does not match BOL.",
+    aiActionable: "Require supervisor sign-off before allowing replacement vehicle entry. Re-verify seal and documentation against new vehicle plate.",
+    aiIntent: "vehicle_change_request",
+    conflictFlag: true,
+    conflictReason: "Vehicle change after verification — requires supervisor approval",
+    routedSupervisorEmail: "supervisor@ymsnow.com",
+    status: "new",
+  }).returning();
+
+  const [log6] = await db.insert(inboundEmailLog).values({
+    senderEmail: "unknowncarrier@test.com",
+    subject: "SHP-10024 - Need urgent help",
+    emailBody: "Please call urgently. This is very important.",
+    receivedAt: mins(3),
+    matchedShipmentRef: "SHP-10024",
+    matchStatus: "invalid_sender",
+    aiSummary: "Invalid sender — cannot process automatically.",
+    aiActionable: "Verify sender identity before taking action.",
+    aiIntent: "general_escalation",
+    conflictFlag: false,
+    conflictReason: null,
+    routedSupervisorEmail: null,
+    status: "new",
+  }).returning();
+
+  // Insert corresponding alerts
+  await db.insert(emailAiAlerts).values([
+    {
+      inboundEmailId: log1.id,
+      shipmentId: null,
+      shipmentRefNo: "SHP-10024",
+      alertTitle: "SHP-10024: Delay — Truck Breakdown",
+      alertMessage: "SHP-10024 (FastMove): Truck breakdown causes 3-hour delay. Driver awaiting roadside assistance. Suggested action: Reschedule dock slot by 3 hours and notify crew. Conflict: No.",
+      priority: "medium",
+      suggestedAction: "Delay appointment SHP-10024 by 3 hours and notify dock scheduling team.",
+      conflictFlag: false,
+      conflictReason: null,
+      supervisorEmailTarget: "supervisor@ymsnow.com",
+      alertStatus: "new",
+    },
+    {
+      inboundEmailId: log2.id,
+      shipmentId: null,
+      shipmentRefNo: "SHP-10031",
+      alertTitle: "SHP-10031: Reschedule Request",
+      alertMessage: "SHP-10031 (BlueDart): Reschedule requested after gate check-in — trailer is already on premises. Suggested action: Supervisor review required before any slot change. Conflict: Yes.",
+      priority: "high",
+      suggestedAction: "Flag visit SHP-10031 for supervisor override. Do not modify appointment retroactively.",
+      conflictFlag: true,
+      conflictReason: "Reschedule requested after gate-in — shipment already on premises",
+      supervisorEmailTarget: "supervisor@ymsnow.com",
+      alertStatus: "new",
+    },
+    {
+      inboundEmailId: log3.id,
+      shipmentId: null,
+      shipmentRefNo: "SHP-10045",
+      alertTitle: "SHP-10045: Urgent Unloading Request",
+      alertMessage: "SHP-10045 (RoadAxis): Priority unloading requested — may disrupt current dock queue order. Suggested action: Escalate to dock supervisor for queue reprioritization decision. Conflict: Yes.",
+      priority: "high",
+      suggestedAction: "Reprioritize SHP-10045 in dock queue with supervisor approval.",
+      conflictFlag: true,
+      conflictReason: "Priority change may impact current dock queue",
+      supervisorEmailTarget: "supervisor@ymsnow.com",
+      alertStatus: "new",
+    },
+    {
+      inboundEmailId: log4.id,
+      shipmentId: null,
+      shipmentRefNo: "SHP-10052",
+      alertTitle: "SHP-10052: Cancellation Request",
+      alertMessage: "SHP-10052 (FastMove): Cancellation requested after unloading started — cannot halt without supervisor override. Suggested action: Pause dock crew and await supervisor decision. Conflict: Yes.",
+      priority: "high",
+      suggestedAction: "Pause unloading on SHP-10052 and escalate to supervisor for cancellation decision.",
+      conflictFlag: true,
+      conflictReason: "Cancellation requested after operation start — manual override required",
+      supervisorEmailTarget: "supervisor@ymsnow.com",
+      alertStatus: "new",
+    },
+    {
+      inboundEmailId: log5.id,
+      shipmentId: null,
+      shipmentRefNo: "SHP-10061",
+      alertTitle: "SHP-10061: Vehicle Change Request",
+      alertMessage: "SHP-10061 (BlueDart): Vehicle substitution after gate verification — new plate does not match BOL. Suggested action: Supervisor sign-off required before allowing replacement vehicle on premises. Conflict: Yes.",
+      priority: "high",
+      suggestedAction: "Hold replacement vehicle at gate. Supervisor must re-verify documentation before entry.",
+      conflictFlag: true,
+      conflictReason: "Vehicle change after verification — requires supervisor approval",
+      supervisorEmailTarget: "supervisor@ymsnow.com",
+      alertStatus: "new",
+    },
+    {
+      inboundEmailId: log6.id,
+      shipmentId: null,
+      shipmentRefNo: "SHP-10024",
+      alertTitle: "Invalid Sender: unknowncarrier@test.com",
+      alertMessage: "Email referencing SHP-10024 received from unregistered sender unknowncarrier@test.com. AI processing blocked — sender not in approved carrier contact list. Conflict: No.",
+      priority: "low",
+      suggestedAction: "Verify sender identity. If legitimate, add to carrier contacts before processing.",
+      conflictFlag: false,
+      conflictReason: null,
+      supervisorEmailTarget: null,
+      alertStatus: "new",
+    },
+  ]);
+
+  console.log("Email intelligence demo data seeded (6 alerts).");
 }

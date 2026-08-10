@@ -2671,27 +2671,41 @@ export async function registerYmsRoutes(app: Express): Promise<void> {
       const status = v.checkOutTime ? "billed" : "pending";
 
       const slot = v.currentSlotId ? slotMap.get(v.currentSlotId) : null;
-      const storageType = slot?.isReefer ? "reefer_premium" : slot?.isHazmat ? "hazmat_premium" : "yard_storage";
-      const storageRate = rateMap.get(storageType);
+      // Resolve storage rate — try canonical keys first, fall back to seeded names
+      const storageRateKey = slot?.isReefer
+        ? (rateMap.has("reefer_premium") ? "reefer_premium" : "detention_reefer")
+        : slot?.isHazmat
+        ? (rateMap.has("hazmat_premium") ? "hazmat_premium" : "storage_general")
+        : (rateMap.has("yard_storage") ? "yard_storage" : "storage_general");
+      const storageRate = rateMap.get(storageRateKey);
       if (storageRate?.isActive && dwellHours > 0) {
         const days = dwellHours / 24;
-        events.push({ id: `E${eid++}`, visitId: v.id, visitNumber: v.visitNumber, carrierId: v.carrierId, carrierName, serviceType: storageType, displayName: storageRate.displayName, description: `${v.trailerNumber || v.visitNumber} — ${days.toFixed(1)} day(s)`, quantityDisplay: `${days.toFixed(1)} days`, ratePerUnit: storageRate.ratePerUnit, totalAmount: Math.round(days * storageRate.ratePerUnit), status, eventDate: v.checkInTime });
+        events.push({ id: `E${eid++}`, visitId: v.id, visitNumber: v.visitNumber, carrierId: v.carrierId, carrierName, serviceType: storageRateKey, displayName: storageRate.displayName, description: `${v.trailerNumber || v.visitNumber} — ${days.toFixed(1)} day(s)`, quantityDisplay: `${days.toFixed(1)} days`, ratePerUnit: storageRate.ratePerUnit, totalAmount: Math.round(days * storageRate.ratePerUnit), status, eventDate: v.checkInTime });
       }
 
       if (v.currentDockDoorId || ["at_dock", "loading", "unloading"].includes(v.visitStatus || "")) {
-        const dockRate = rateMap.get("dock_usage");
+        const isHourlyDock = rateMap.has("dock_usage");
+        const dockRateKey = isHourlyDock ? "dock_usage" : "yard_move";
+        const dockRate = rateMap.get(dockRateKey);
         if (dockRate?.isActive) {
-          const dockHours = Math.min(dwellHours * 0.35, 8);
-          const billable = Math.max(0, dockHours - (dockRate.freeHours || 0));
-          if (billable > 0) events.push({ id: `E${eid++}`, visitId: v.id, visitNumber: v.visitNumber, carrierId: v.carrierId, carrierName, serviceType: "dock_usage", displayName: dockRate.displayName, description: `${v.trailerNumber || v.visitNumber} — est. ${billable.toFixed(1)}h dock`, quantityDisplay: `${billable.toFixed(1)} hrs`, ratePerUnit: dockRate.ratePerUnit, totalAmount: Math.round(billable * dockRate.ratePerUnit), status, eventDate: v.checkInTime });
+          if (isHourlyDock) {
+            // Hourly dock-usage rate — bill for estimated dwell time at dock
+            const dockHours = Math.min(dwellHours * 0.35, 8);
+            const billable = Math.max(0, dockHours - (dockRate.freeHours || 0));
+            if (billable > 0) events.push({ id: `E${eid++}`, visitId: v.id, visitNumber: v.visitNumber, carrierId: v.carrierId, carrierName, serviceType: dockRateKey, displayName: dockRate.displayName, description: `${v.trailerNumber || v.visitNumber} — est. ${billable.toFixed(1)}h dock`, quantityDisplay: `${billable.toFixed(1)} hrs`, ratePerUnit: dockRate.ratePerUnit, totalAmount: Math.round(billable * dockRate.ratePerUnit), status, eventDate: v.checkInTime });
+          } else {
+            // Per-move spotting rate — one charge per dock assignment
+            events.push({ id: `E${eid++}`, visitId: v.id, visitNumber: v.visitNumber, carrierId: v.carrierId, carrierName, serviceType: dockRateKey, displayName: dockRate.displayName, description: `${v.trailerNumber || v.visitNumber} — dock spot move`, quantityDisplay: "1 move", ratePerUnit: dockRate.ratePerUnit, totalAmount: dockRate.ratePerUnit, status, eventDate: v.checkInTime });
+          }
         }
       }
 
-      const detRate = rateMap.get("detention");
+      const detRateKey = rateMap.has("detention") ? "detention" : (slot?.isReefer ? "detention_reefer" : "detention_dry");
+      const detRate = rateMap.get(detRateKey);
       const freeH = detRate?.freeHours ?? 48;
       if (detRate?.isActive && dwellHours > freeH) {
         const excess = dwellHours - freeH;
-        events.push({ id: `E${eid++}`, visitId: v.id, visitNumber: v.visitNumber, carrierId: v.carrierId, carrierName, serviceType: "detention", displayName: detRate.displayName, description: `${v.trailerNumber || v.visitNumber} — ${excess.toFixed(1)}h excess dwell`, quantityDisplay: `${excess.toFixed(1)} hrs overage`, ratePerUnit: detRate.ratePerUnit, totalAmount: Math.round(excess * detRate.ratePerUnit), status, eventDate: v.checkInTime });
+        events.push({ id: `E${eid++}`, visitId: v.id, visitNumber: v.visitNumber, carrierId: v.carrierId, carrierName, serviceType: detRateKey, displayName: detRate.displayName, description: `${v.trailerNumber || v.visitNumber} — ${excess.toFixed(1)}h excess dwell`, quantityDisplay: `${excess.toFixed(1)} hrs overage`, ratePerUnit: detRate.ratePerUnit, totalAmount: Math.round(excess * detRate.ratePerUnit), status, eventDate: v.checkInTime });
       }
 
       if (v.appointmentId) {

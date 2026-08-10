@@ -1,5 +1,5 @@
 import app from "./app";
-import { seedDatabase, seedRbacIfEmpty, seedAdditionalFacilities, seedModuleSubscriptions } from "./lib/seed";
+import { seedDatabase, seedRbacIfEmpty, seedAdditionalFacilities, seedModuleSubscriptions, seedEmailIntelligenceIfEmpty } from "./lib/seed";
 
 const rawPort = process.env["PORT"];
 
@@ -21,6 +21,7 @@ app.listen(port, () => {
     .then(() => seedAdditionalFacilities())
     .then(() => seedRbacIfEmpty())
     .then(() => seedModuleSubscriptions())
+    .then(() => seedEmailIntelligenceIfEmpty())
     .catch((err) => {
       console.error("Startup seed failed:", err);
     });
